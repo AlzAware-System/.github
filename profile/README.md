@@ -52,7 +52,7 @@
 │  Auth-ChatBot-Service   │      │  Face-Recognition-Service    │
 │  ─────────────────────  │      │  ──────────────────────────  │
 │  • JWT Authentication   │ JWT  │  • Face Recognition (FaceNet)│
-│  • User Management      │─────▶│  • Medicine Detection (YOLO) │
+│  • User Management      │────▶│ • Medicine Detection (YOLO)  │
 │  • AI Chatbot (Gemini)  │Token │  • Object Detection (YOLO)   │
 │  • GPS Tracking         │Verify│  • Model Hot-Reload from S3  │
 │  • Prescriptions & Todos│      │  • Real-time Frame Analysis  │
@@ -67,8 +67,8 @@
            │                                  │
            ▼                                  ▼
     ┌──────────────┐                ┌──────────────────┐
-    │  SQL Server   │                │    AWS S3         │
-    │  (Alzaware DB)│                │  (Model Storage)  │
+    │  SQL Server  │               │    AWS S3        │
+    │ (Alzaware DB)│               │  (Model Storage) │
     └──────────────┘                └──────────────────┘
 ```
 
@@ -388,19 +388,54 @@ project-grad-code/
 
 ## 🔒 Security
 
-- **Password Hashing**: Passwords are hashed using `passlib` (bcrypt) — never stored in plain text
-- **JWT Tokens**: HS256-signed tokens with configurable expiry and password-change invalidation
-- **Token Blacklist**: Logout revokes tokens via in-memory blacklist
-- **Rate Limiting**: Per-IP rate limiting on all auth endpoints (default: 100/min)
-- **Security Headers**: Flask-Talisman enforces CSP, HSTS, and secure cookie settings
-- **Input Validation**: Pydantic validates all JSON payloads (returns 422 on schema errors)
-- **Cross-Service Auth**: Face-Recognition-Service verifies JWT tokens from Auth-ChatBot-Service
+### Baseline Defenses
 
-> ⚠️ **Production Recommendations**:
-> - Use a strong, unique `SECRET_KEY` (at least 32 random characters)
-> - Persist token blacklist in Redis or database
-> - Enable HTTPS via reverse proxy (Nginx)
-> - Use a WSGI server like Gunicorn instead of Flask dev server
+| Layer | Technology | Scope |
+|:---|:---|:---|
+| **Password Hashing** | `bcrypt` | Auth-ChatBot-Service |
+| **JWT Authentication** | `HS256` + password-bound `pwd_sig` claim | All services |
+| **Security Headers** | Flask-Talisman (CSP, HSTS, X-Frame-Options) | Auth-ChatBot-Service |
+| **Input Validation** | Pydantic v2 strict schemas | Auth-ChatBot-Service |
+| **Rate Limiting** | Flask-Limiter (per-IP, 100 req/min) | Auth-ChatBot-Service |
+| **SQL Injection** | SQLAlchemy ORM (parameterized queries) | Auth-ChatBot-Service |
+| **API Key Auth** | Static `X-Auth-Key` header | Face-Recognition-Service |
+| **Token Revocation** | In-memory blacklist on logout | Auth-ChatBot-Service |
+
+---
+
+### 🛡️ Security Audit & Vulnerability Remediation
+
+A comprehensive security audit was conducted across the entire AlzAware backend platform. **7 vulnerabilities** were identified and remediated:
+
+| # | Vulnerability | Severity | OWASP Category | Service(s) Affected | Status |
+|:--|:---|:---|:---|:---|:---|
+| 1 | Registration Enumeration | 🔴 High | A01 — Broken Access Control | Auth-ChatBot | ✅ Fixed |
+| 2 | Werkzeug Debugger / Info Disclosure | 🔴 High | A05 — Security Misconfiguration | Auth-ChatBot | ✅ Fixed |
+| 3 | Weak JWT Secret (Token Forgery) | 🔴 Critical | A02 — Cryptographic Failures | All Services | ✅ Fixed |
+| 4 | Token Invalidation Failure | 🔴 High | A07 — Auth Failures | Auth-ChatBot | ✅ Fixed |
+| 5 | AI Chatbot Prompt Injection | 🟠 Medium | A03 — Injection | Auth-ChatBot | ✅ Fixed |
+| 6 | Token Fixation | 🟠 Medium | A07 — Auth Failures | Auth-ChatBot | ✅ Fixed |
+| 7 | Account Lockout via Email Hijacking | 🔴 High | A01 — Broken Access Control | Auth-ChatBot | ✅ Fixed |
+
+**Key highlights:**
+
+- **Registration Enumeration:** Registration endpoints now return identical responses (status code, body, timing) regardless of whether an email exists, preventing attackers from harvesting registered accounts.
+- **Weak JWT Secret & Safe Rotation:** The weak JWT secret was replaced with a cryptographically secure 64-character hex key across all three services. A `JWT_SECRET_OLD` fallback mechanism ensures existing mobile sessions are not disrupted during rotation.
+- **Token Invalidation After Password Change:** Fixed a Python timezone bug that prevented `password_changed_at` timestamps from correctly invalidating old tokens. Password changes now instantly revoke all previously issued JWTs.
+- **AI Prompt Injection Defense:** User input is now strictly separated from system instructions in the Gemini API integration using structured multi-turn message arrays, preventing prompt override attacks.
+- **Werkzeug Debugger Disabled:** Production environments no longer expose the interactive debugger, preventing stack trace leakage and remote code execution.
+- **Token Fixation Protection:** Authentication operations always issue fresh tokens bound to the current password hash, preventing session reuse across authentication boundaries.
+- **Email Hijacking Prevention:** Email updates now require ownership verification before applying changes, preventing account identity theft.
+
+📖 **Detailed patch documentation:** See [Auth-ChatBot-Service Security](./Auth-ChatBot-Service/README.md#-security) and [Face-Recognition-Service Security](./Face-Recognition-Service/README.md#-security).
+
+> ⚠️ **Production Checklist**:
+> - ✅ Cryptographically secure `JWT_SECRET` (64+ hex characters) across all services
+> - ✅ `FLASK_ENV=production` enforced
+> - ☐ Enable HTTPS via Nginx reverse proxy
+> - ☐ Deploy with Gunicorn / uWSGI (not Flask dev server)
+> - ☐ Persist token blacklist in Redis or database
+> - ☐ Rotate `JWT_SECRET_OLD` out after transition period
 
 ---
 
