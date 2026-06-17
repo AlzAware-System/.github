@@ -48,31 +48,158 @@
            │  REST API                        │  REST API
            │  (Auth, Chat, GPS, User Mgmt)    │  (Image Upload, Recognition)
            ▼                                  ▼
+
 ┌─────────────────────────┐      ┌──────────────────────────────┐
 │  Auth-ChatBot-Service   │      │  Face-Recognition-Service    │
 │  ─────────────────────  │      │  ──────────────────────────  │
-│  • JWT Authentication   │ JWT  │  • Face Recognition (FaceNet)│
-│  • User Management      │────▶│ • Medicine Detection (YOLO)  │
-│  • AI Chatbot (Gemini)  │Token │  • Object Detection (YOLO)   │
+│  • JWT Authentication   │ JWT  │  • Face Recognition Module   │
+│  • User Management      │────▶│ • Medicine Detection Module  │
+│  • ChatBot Module       │Token │  • Object Detection Module   │
 │  • GPS Tracking         │Verify│  • Model Hot-Reload from S3  │
 │  • Prescriptions & Todos│      │  • Real-time Frame Analysis  │
 │  • Game Scores          │      │                              │
-│  • MRI Scan Analysis    │      │                              │
+│  • MRI Scan Management  │      │                              │
 │  • Admin Dashboard      │      │                              │
 ├─────────────────────────┤      ├──────────────────────────────┤
-│  Port: 5005             │      │  Port: 5000                  │
-│  DB: SQL Server (SSMS)  │      │  Storage: AWS S3             │
-│  Framework: Flask       │      │  Framework: Flask            │
-└─────────────────────────┘      └──────────────────────────────┘
-           │                                  │
-           ▼                                  ▼
-    ┌──────────────┐                ┌──────────────────┐
-    │  SQL Server  │               │    AWS S3        │
-    │ (Alzaware DB)│               │  (Model Storage) │
-    └──────────────┘                └──────────────────┘
+│ Port: 5005              │      │ Port: 5000                   │
+│ Framework: Flask        │      │ Framework: Flask             │
+└──────────┬──────────────┘      └──────────────┬───────────────┘
+           │                                    │
+           │                                    │
+     ┌─────▼─────┐                       ┌──────▼───────┐
+     │ SQL Server│                       │    AWS S3    │
+     │AlzAware DB│                       │ Model Storage│
+     └───────────┘                       └──────────────┘
+           ▲
+           │
+     ┌─────┴─────┐
+     │   Redis   │
+     │ Cache &   │
+     │    JWT    │
+     │ Blacklist │
+     └───────────┘
 ```
 
+> **Note:** Redis is integrated as an in-memory caching layer for GPS location retrieval and JWT token blacklisting, reducing database load and improving response time.
+
 ---
+## ⚡ Redis Integration
+
+To improve performance and enhance security, Redis was introduced as an in-memory data store within the Auth-ChatBot-Service.
+
+### GPS Location Caching
+
+Originally, every GPS update and retrieval operation interacted directly with the SQL Server database.
+
+After integrating Redis, the latest location for each patient is cached using a dedicated key:
+
+```text
+gps:<patient_id>
+```
+
+When a new GPS coordinate is received:
+
+```text
+GPS Device
+    ↓
+receive_gps
+    ↓
+SQL Server
+    ↓
+Redis Cache
+```
+
+When a caregiver requests the patient's latest location:
+
+```text
+get_last_location
+    ↓
+Redis Cache
+```
+
+If the location exists in Redis, it is returned immediately without accessing the database.
+
+If the cache entry is missing:
+
+```text
+SQL Server
+    ↓
+Redis Cache
+    ↓
+Response
+```
+
+A TTL (Time-To-Live) of 24 hours is applied to automatically remove outdated location data and prevent cache growth.
+
+### JWT Token Blacklisting
+
+Redis is also used to implement token revocation after logout.
+
+When a user logs out:
+
+```text
+JWT Token
+    ↓
+Logout Endpoint
+    ↓
+Redis Blacklist
+```
+
+The token is stored using:
+
+```text
+blacklist:<jwt_token>
+```
+
+The remaining token lifetime is used as the Redis TTL value. Once the token naturally expires, Redis automatically removes the blacklist entry.
+
+For every authenticated request:
+
+```text
+JWT Validation
+    ↓
+Redis Blacklist Check
+```
+
+If the token exists in the blacklist:
+
+```http
+401 Unauthorized
+```
+
+is returned immediately.
+
+### Centralized Redis Client
+
+A dedicated Redis client module was implemented:
+
+```text
+app/utils/redis_client.py
+```
+
+This centralizes connection management and allows all modules to reuse the same Redis configuration.
+
+### Fault Tolerance
+
+Redis operations are wrapped in exception handling blocks.
+
+If Redis becomes unavailable:
+
+* GPS requests automatically fall back to SQL Server.
+* Authentication continues using the existing validation workflow.
+* Core application functionality remains operational.
+
+This graceful degradation strategy ensures high availability while still benefiting from caching and token blacklisting when Redis is available.
+
+### Benefits
+
+* Faster GPS retrieval operations.
+* Reduced database workload.
+* Secure JWT revocation mechanism.
+* Automatic cleanup using TTL.
+* Improved system scalability.
+* No changes required on the mobile application side.
+
 
 ## 📦 Services Overview
 
@@ -315,17 +442,20 @@ SECRET_KEY=your-secret-key-change-in-production
 
 ## 🛠️ Tech Stack
 
-| Layer | Auth-ChatBot-Service | Face-Recognition-Service |
-|:---|:---|:---|
-| **Framework** | Flask 3.0 | Flask 3.0 |
-| **Database** | SQL Server (SSMS) | AWS S3 (model storage) |
-| **ORM** | Flask-SQLAlchemy + Alembic | — |
-| **Auth** | PyJWT (HS256) | PyJWT (HS256) — token verification |
-| **AI/ML** | Google Gemini (LangChain) | FaceNet, SVM, MTCNN, YOLO |
-| **Security** | Flask-Talisman, Flask-Limiter, Pydantic | — |
-| **Voice** | SpeechRecognition, gTTS, pydub | — |
-| **Vector DB** | ChromaDB + sentence-transformers | — |
-| **Cloud** | — | AWS S3 (boto3) |
+| Layer                 | Auth-ChatBot-Service                    | Face-Recognition-Service           |
+| :-------------------- | :-------------------------------------- | :--------------------------------- |
+| **Framework**         | Flask 3.0                               | Flask 3.0                          |
+| **Database**          | SQL Server (SSMS)                       | AWS S3 (Model Storage)             |
+| **ORM**               | Flask-SQLAlchemy + Alembic              | —                                  |
+| **Authentication**    | PyJWT (HS256)                           | PyJWT (HS256) – Token Verification |
+| **Caching**           | Redis (GPS Cache & JWT Blacklist)       | —                                  |
+| **AI/ML**             | Google Gemini (LangChain)               | FaceNet, SVM, MTCNN, YOLO          |
+| **Security**          | Flask-Talisman, Flask-Limiter, Pydantic | JWT Middleware                     |
+| **Voice Processing**  | SpeechRecognition, gTTS, pydub          | —                                  |
+| **Vector Database**   | ChromaDB + Sentence Transformers        | —                                  |
+| **Cloud Services**    | Redis Cloud                             | AWS S3 (boto3)                     |
+| **Deployment**        | Gunicorn, Python 3.11                   | Gunicorn, Python 3.11              |
+| **API Communication** | REST APIs                               | REST APIs                          |
 
 ---
 
@@ -399,7 +529,7 @@ project-grad-code/
 | **Rate Limiting** | Flask-Limiter (per-IP, 100 req/min) | Auth-ChatBot-Service |
 | **SQL Injection** | SQLAlchemy ORM (parameterized queries) | Auth-ChatBot-Service |
 | **API Key Auth** | Static `X-Auth-Key` header | Face-Recognition-Service |
-| **Token Revocation** | In-memory blacklist on logout | Auth-ChatBot-Service |
+| **Token Revocation** | Redis-based JWT Blacklist | Auth-ChatBot-Service |
 
 ---
 
@@ -434,8 +564,8 @@ A comprehensive security audit was conducted across the entire AlzAware backend 
 > - ✅ `FLASK_ENV=production` enforced
 > - ☐ Enable HTTPS via Nginx reverse proxy
 > - ☐ Deploy with Gunicorn / uWSGI (not Flask dev server)
-> - ☐ Persist token blacklist in Redis or database
-> - ☐ Rotate `JWT_SECRET_OLD` out after transition period
+> - ✅ Persist token blacklist in Redis or database
+> - ✅ Rotate `JWT_SECRET_OLD` out after transition period
 
 ---
 
