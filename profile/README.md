@@ -429,13 +429,26 @@ RATELIMIT_STORAGE_URI=memory://
 SMTP_USER=your_gmail@gmail.com
 SMTP_PASSWORD=your_gmail_app_password
 EMAIL_FROM=your_gmail@gmail.com
+
+# AWS / SNS configuration
+AWS_REGION=eu-north-1
+AWS_ACCESS_KEY_ID=your_aws_access_key_id
+AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
+SNS_PLATFORM_APPLICATION_ARN=your_sns_platform_application_arn
+
+# Redis Configuration
+REDIS_HOST=your_redis_host_here
+REDIS_PORT=10371
+REDIS_USERNAME=default
+REDIS_PASSWORD=your_redis_password_here
 ```
 
 ### Face-Recognition-Service `.env`
 
 ```env
-# Must match the SECRET_KEY in Auth-ChatBot-Service
-SECRET_KEY=your-secret-key-change-in-production
+API_KEY=My-Super-Secret-Key-For-Training
+JWT_SECRET=JwtSecretForAuth
+SECRET_KEY=another_secure_key_for_flask_internal
 ```
 
 ---
