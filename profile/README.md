@@ -14,6 +14,7 @@
 - [API Endpoints Reference](#-api-endpoints-reference)
 - [Environment Configuration](#-environment-configuration)
 - [Tech Stack](#-tech-stack)
+- [Data Validation & Transformation](#-data-validation--transformation)
 - [Project Structure](#-project-structure)
 - [Security](#-security)
 - [Authors](#-authors)
@@ -469,6 +470,24 @@ SECRET_KEY=another_secure_key_for_flask_internal
 | **Cloud Services**    | Redis Cloud                             | AWS S3 (boto3)                     |
 | **Deployment**        | Gunicorn, Python 3.11                   | Gunicorn, Python 3.11              |
 | **API Communication** | REST APIs                               | REST APIs                          |
+
+---
+
+## 📝 Data Validation & Transformation
+
+This project employs rigorous data validation and transformation pipelines to ensure data integrity, prevent injection attacks, and prepare data for AI models across services.
+
+### Validation (`Pydantic`)
+- **Strict Payloads:** All incoming API requests to the Auth-ChatBot-Service are validated against robust `Pydantic v2` schemas (e.g., `RegisterPatientPayload`, `LoginPayload`).
+- **Data Integrity:** We use `ConfigDict(extra='forbid')` to reject any undocumented fields, mitigating mass-assignment vulnerabilities.
+- **Custom Business Logic:** Complex validation rules (e.g., matching passwords, verifying contact info formats) are enforced using Pydantic's `@model_validator(mode='after')`.
+
+### Serialization & Transformation
+- **Object-to-JSON Serialization:** Dedicated mapping functions cleanly transform complex `SQLAlchemy` ORM entities into secure, formatted JSON dictionaries for API responses.
+- **JSON-to-Object Deserialization:** Incoming raw JSON payloads are transformed and sanitized into safe Python data types using Pydantic.
+- **AI/ML Data Pipelines:**
+  - **NLP:** Text queries are transformed into dense vector embeddings using `SentenceTransformer` for RAG and ChromaDB querying.
+  - **Computer Vision:** `LabelEncoder` transforms raw string labels (names) into numeric formats for SVM training (`fit_transform`) and inverse-transforms back to names during inference (`inverse_transform`).
 
 ---
 
